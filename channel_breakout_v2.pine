@@ -1,0 +1,146 @@
+//@version=5
+strategy("Lobster Channel Breakout", overlay=true, initial_capital=200, default_qty_type=strategy.percent_of_equity, default_qty_value=50, commission_type=strategy.commission.percent, commission_value=0.06, pyramiding=0)
+
+// ============================================================
+// 🦞 震荡通道突破策略 v2
+// 核心：close 创 N 周期新高 → 做多 / 创新低 → 做空
+//       ATR 动态止损止盈 + 移动止损
+// ============================================================
+
+// ============ 参数 ============
+grp_ch = "📐 通道参数"
+ch_len = input.int(20, "通道周期 N", minval=5, maxval=200, group=grp_ch, tooltip="过去N根K线close的最高/最低值作为通道边界")
+
+grp_risk = "🛡️ 风控参数"
+atr_len = input.int(14, "ATR 周期", group=grp_risk)
+sl_mult = input.float(1.5, "止损 ATR 倍数", minval=0.5, maxval=5.0, step=0.1, group=grp_risk)
+tp_mult = input.float(3.0, "止盈 ATR 倍数", minval=1.0, maxval=10.0, step=0.5, group=grp_risk)
+use_trail = input.bool(true, "启用移动止损", group=grp_risk)
+trail_mult = input.float(2.0, "移动止损 ATR 倍数", minval=0.5, step=0.1, group=grp_risk)
+trail_act = input.float(1.0, "激活盈利 %", minval=0.1, step=0.1, group=grp_risk, tooltip="盈利达到此比例后启用移动止损")
+
+grp_web = "📡 Webhook"
+use_wh = input.bool(true, "发送 Webhook", group=grp_web)
+wh_secret = input("quant_lobster_2026", "密钥", group=grp_web)
+
+// ============ 指标 ============
+
+// ATR
+atr = ta.atr(atr_len)
+
+// 通道 = 过去 N 根 close 的 max/min (含当前K线)
+upper_ch = ta.highest(close, ch_len)
+lower_ch = ta.lowest(close, ch_len)
+mid_ch = math.avg(upper_ch, lower_ch)
+
+// 通道宽度
+ch_width = (upper_ch - lower_ch) / mid_ch * 100
+
+// 通道斜率（上升/下降判断）
+ch_slope = (mid_ch - mid_ch[5]) / mid_ch[5] * 100
+
+// ============ 信号 ============
+
+// 突破：close 创 N 周期新高 → 做多
+// 跌破：close 创 N 周期新低 → 做空
+long_signal = close == upper_ch and close[1] < upper_ch[1]
+short_signal = close == lower_ch and close[1] > lower_ch[1]
+
+// ============ 绘图 ============
+u_plot = plot(upper_ch, "上界", color=color.new(color.teal, 20), linewidth=2)
+l_plot = plot(lower_ch, "下界", color=color.new(color.teal, 20), linewidth=2)
+plot(mid_ch, "中轨", color=color.new(color.gray, 60), linewidth=1)
+fill(u_plot, l_plot, color=color.new(color.teal, 92), title="通道")
+
+plotshape(long_signal, "做多▲", shape.triangleup, location.belowbar, color.new(color.green, 0), size=size.normal, text="L")
+plotshape(short_signal, "做空▼", shape.triangledown, location.abovebar, color.new(color.red, 0), size=size.normal, text="S")
+
+// 通道方向背景
+bgcolor(ch_slope > 0.1 ? color.new(color.green, 94) : ch_slope < -0.1 ? color.new(color.red, 94) : na, title="通道方向")
+
+// ============ 止损止盈状态 ============
+
+var float sl = na
+var float tp = na
+var float trail = na
+var bool trail_on = false
+
+// 更新止损止盈（在持仓期间）
+if strategy.position_size > 0  // 多头
+    profit_pct = (close - strategy.position_avg_price) / strategy.position_avg_price * 100
+    if use_trail and profit_pct >= trail_act
+        trail_on := true
+    if trail_on
+        new_trail = close - atr * trail_mult
+        trail := math.max(nz(trail, 0), new_trail)
+        sl := trail
+
+if strategy.position_size < 0  // 空头
+    profit_pct = (strategy.position_avg_price - close) / strategy.position_avg_price * 100
+    if use_trail and profit_pct >= trail_act
+        trail_on := true
+    if trail_on
+        new_trail = close + atr * trail_mult
+        trail := math.min(nz(trail, 999999), new_trail)
+        sl := trail
+
+// 绘制止损止盈线
+plot(strategy.position_size != 0 ? sl : na, "止损", color=color.new(color.red, 20), style=plot.style_linebr, linewidth=2)
+plot(strategy.position_size != 0 ? tp : na, "止盈", color=color.new(color.green, 20), style=plot.style_linebr, linewidth=2)
+
+// ============ 策略执行 ============
+
+if long_signal
+    sl := close - atr * sl_mult
+    tp := close + atr * tp_mult
+    trail := sl
+    trail_on := false
+    strategy.entry("Long", strategy.long)
+    strategy.exit("LX", "Long", stop=sl, limit=tp)
+
+if short_signal
+    sl := close + atr * sl_mult
+    tp := close - atr * tp_mult
+    trail := tp
+    trail_on := false
+    strategy.entry("Short", strategy.short)
+    strategy.exit("SX", "Short", stop=sl, limit=tp)
+
+// 移动止损更新 exit
+if strategy.position_size > 0 and trail_on
+    strategy.exit("LX", "Long", stop=sl)
+if strategy.position_size < 0 and trail_on
+    strategy.exit("SX", "Short", stop=sl)
+
+// ============ 信息面板 ============
+
+var table panel = table.new(position.top_right, 2, 7, bgcolor=color.new(color.black, 70), border_width=1)
+if barstate.islast
+    table.cell(panel, 0, 0, "通道周期", text_color=color.white, text_size=size.small)
+    table.cell(panel, 1, 0, str.tostring(ch_len), text_color=color.white, text_size=size.small)
+    table.cell(panel, 0, 1, "上界", text_color=color.white, text_size=size.small)
+    table.cell(panel, 1, 1, str.tostring(upper_ch, "#.##"), text_color=color.teal, text_size=size.small)
+    table.cell(panel, 0, 2, "下界", text_color=color.white, text_size=size.small)
+    table.cell(panel, 1, 2, str.tostring(lower_ch, "#.##"), text_color=color.teal, text_size=size.small)
+    table.cell(panel, 0, 3, "斜率", text_color=color.white, text_size=size.small)
+    table.cell(panel, 1, 3, str.tostring(ch_slope, "#.##") + "%", text_color=ch_slope > 0 ? color.green : color.red, text_size=size.small)
+    table.cell(panel, 0, 4, "ATR", text_color=color.white, text_size=size.small)
+    table.cell(panel, 1, 4, str.tostring(atr, "#.##"), text_color=color.white, text_size=size.small)
+    
+    if strategy.position_size != 0
+        dir_text = strategy.position_size > 0 ? "做多 🟢" : "做空 🔴"
+        table.cell(panel, 0, 5, "持仓", text_color=color.white, text_size=size.small)
+        table.cell(panel, 1, 5, dir_text, text_color=strategy.position_size > 0 ? color.green : color.red, text_size=size.small)
+        table.cell(panel, 0, 6, "止损/盈", text_color=color.white, text_size=size.small)
+        table.cell(panel, 1, 6, str.tostring(sl, "#.##") + " / " + str.tostring(tp, "#.##"), text_color=color.white, text_size=size.small)
+
+// ============ Webhook ============
+
+if use_wh
+    if long_signal
+        msg = '{"secret":"' + wh_secret + '","symbol":"' + syminfo.ticker + '/USDT","action":"long","price":"' + str.tostring(close) + '","stop_loss":"' + str.tostring(close - atr * sl_mult) + '","take_profit":"' + str.tostring(close + atr * tp_mult) + '","strategy":"channel_breakout","confidence":"0.8","timeframe":"' + timeframe.period + '"}'
+        alert(msg, alert.freq_once_per_bar_close)
+
+    if short_signal
+        msg = '{"secret":"' + wh_secret + '","symbol":"' + syminfo.ticker + '/USDT","action":"short","price":"' + str.tostring(close) + '","stop_loss":"' + str.tostring(close + atr * sl_mult) + '","take_profit":"' + str.tostring(close - atr * tp_mult) + '","strategy":"channel_breakout","confidence":"0.8","timeframe":"' + timeframe.period + '"}'
+        alert(msg, alert.freq_once_per_bar_close)
