@@ -1,5 +1,5 @@
 //@version=5
-strategy("Lobster Turtle Channel v3", overlay=true, initial_capital=200, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.06, pyramiding=3)
+strategy("Lobster Turtle Channel v3", overlay=true, initial_capital=200, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.06, pyramiding=3, max_bars_back=500)
 
 // ============================================================
 // 🦞 海龟式通道趋势跟踪策略 v3
@@ -84,12 +84,13 @@ short_first = short_entry and not short_entry[1]
 // ============ 仓位计算 ============
 
 // ATR-based 仓位：risk_per_trade% 的资金 / (sl_atr * ATR)
-// 即：每笔亏 risk_per_trade% 的总资金
-pos_size = strategy.equity * risk_per_trade / 100 / (sl_atr * atr)
-// 限制不超过总资金的 100% 价值
-pos_value = pos_size * close
-max_value = strategy.equity * 1.0
-pos_size := pos_value > max_value ? max_value / close : pos_size
+raw_pos = na(atr) or atr <= 0 ? 0.0 : strategy.equity * risk_per_trade / 100 / (sl_atr * atr)
+// 限制不超过总资金的 80% 价值（留余量）
+pos_value = raw_pos * close
+max_value = strategy.equity * 0.8
+pos_size = pos_value > max_value ? max_value / close : raw_pos
+// 最终保护：确保有效仓位
+pos_size := pos_size > 0 and not na(pos_size) ? pos_size : 0.0
 
 // ============ 状态跟踪 ============
 
@@ -122,7 +123,7 @@ plotshape(short_exit and strategy.position_size < 0, "平空", shape.xcross, loc
 // ============ 策略执行 ============
 
 // --- 做多逻辑 ---
-if long_first and strategy.position_size <= 0
+if long_first and strategy.position_size <= 0 and pos_size > 0
     last_entry_price := close
     add_count := 0
     last_add_price := close
@@ -130,7 +131,7 @@ if long_first and strategy.position_size <= 0
     strategy.exit("LongSL", "Long", stop=close - atr * sl_atr)
 
 // 做多加仓
-if strategy.position_size > 0 and add_count < max_add and close >= last_add_price + atr * add_atr
+if strategy.position_size > 0 and add_count < max_add and close >= last_add_price + atr * add_atr and pos_size > 0
     add_count += 1
     last_add_price := close
     strategy.entry("LongAdd" + str.tostring(add_count), strategy.long, qty=pos_size * 0.5)
@@ -141,7 +142,7 @@ if long_exit and strategy.position_size > 0
     strategy.close("Long", comment="通道出场")
 
 // --- 做空逻辑 ---
-if short_first and strategy.position_size >= 0
+if short_first and strategy.position_size >= 0 and pos_size > 0
     last_entry_price := close
     add_count := 0
     last_add_price := close
@@ -149,7 +150,7 @@ if short_first and strategy.position_size >= 0
     strategy.exit("ShortSL", "Short", stop=close + atr * sl_atr)
 
 // 做空加仓
-if strategy.position_size < 0 and add_count < max_add and close <= last_add_price - atr * add_atr
+if strategy.position_size < 0 and add_count < max_add and close <= last_add_price - atr * add_atr and pos_size > 0
     add_count += 1
     last_add_price := close
     strategy.entry("ShortAdd" + str.tostring(add_count), strategy.short, qty=pos_size * 0.5)
