@@ -1,0 +1,74 @@
+//@version=5
+strategy("Lobster EMA Cross", overlay=true, initial_capital=200, default_qty_type=strategy.percent_of_equity, default_qty_value=50, commission_type=strategy.commission.percent, commission_value=0.06)
+
+// ============ 参数设置 ============
+fast_len = input.int(12, "快线 EMA 周期", minval=1)
+slow_len = input.int(26, "慢线 EMA 周期", minval=1)
+adx_len = input.int(14, "ADX 周期", minval=1)
+adx_thresh = input.int(25, "ADX 趋势阈值", minval=10)
+atr_len = input.int(14, "ATR 周期", minval=1)
+sl_atr_mult = input.float(1.5, "止损 ATR 倍数", minval=0.5, step=0.1)
+tp_atr_mult = input.float(3.0, "止盈 ATR 倍数", minval=1.0, step=0.5)
+use_webhook = input.bool(true, "发送 Webhook 信号")
+
+// ============ 指标计算 ============
+ema_fast = ta.ema(close, fast_len)
+ema_slow = ta.ema(close, slow_len)
+[di_plus, di_minus, adx] = ta.dmi(adx_len, adx_len)
+atr = ta.atr(atr_len)
+
+// ============ 信号逻辑 ============
+bull_cross = ta.crossover(ema_fast, ema_slow)
+bear_cross = ta.crossunder(ema_fast, ema_slow)
+trend_strong = adx > adx_thresh
+
+long_signal = bull_cross and trend_strong
+short_signal = bear_cross and trend_strong
+
+// ============ 止损止盈 ============
+long_sl = close - atr * sl_atr_mult
+long_tp = close + atr * tp_atr_mult
+short_sl = close + atr * sl_atr_mult
+short_tp = close - atr * tp_atr_mult
+
+// ============ 绘图 ============
+plot(ema_fast, "EMA Fast", color=color.new(color.blue, 0), linewidth=2)
+plot(ema_slow, "EMA Slow", color=color.new(color.orange, 0), linewidth=2)
+plot(adx, "ADX", color=color.new(color.purple, 50), display=display.none)
+hline(adx_thresh, "ADX 阈值", color=color.new(color.gray, 70), linestyle=hline.style_dotted)
+
+// 信号标记
+plotshape(long_signal, "做多信号", shape.triangleup, location.belowbar, color.new(color.green, 0), size=size.small)
+plotshape(short_signal, "做空信号", shape.triangledown, location.abovebar, color.new(color.red, 0), size=size.small)
+
+// ============ 策略执行 ============
+if long_signal
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=long_sl, limit=long_tp)
+
+if short_signal
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=short_sl, limit=short_tp)
+
+// ADX 弱趋势时平仓
+if adx < 20
+    strategy.close_all(comment="趋势减弱平仓")
+
+// ============ Webhook 信号 ============
+webhook_secret = "quant_lobster_2026"
+webhook_url = "http://YOUR_SERVER:8888/webhook"
+
+if use_webhook
+    if long_signal
+        msg = '{"secret":"' + webhook_secret + '","symbol":"' + syminfo.ticker + '/USDT","action":"long","price":"' + str.tostring(close) + '","stop_loss":"' + str.tostring(long_sl) + '","take_profit":"' + str.tostring(long_tp) + '","strategy":"ema_cross","timeframe":"' + timeframe.period + '"}'
+        alert(msg, alert.freq_once_per_bar_close)
+    
+    if short_signal
+        msg = '{"secret":"' + webhook_secret + '","symbol":"' + syminfo.ticker + '/USDT","action":"short","price":"' + str.tostring(close) + '","stop_loss":"' + str.tostring(short_sl) + '","take_profit":"' + str.tostring(short_tp) + '","strategy":"ema_cross","timeframe":"' + timeframe.period + '"}'
+        alert(msg, alert.freq_once_per_bar_close)
+
+    // 平仓信号
+    if adx < 20 and strategy.position_size != 0
+        direction = strategy.position_size > 0 ? "close_long" : "close_short"
+        msg = '{"secret":"' + webhook_secret + '","symbol":"' + syminfo.ticker + '/USDT","action":"' + direction + '","price":"' + str.tostring(close) + '","strategy":"ema_cross","timeframe":"' + timeframe.period + '"}'
+        alert(msg, alert.freq_once_per_bar_close)

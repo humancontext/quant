@@ -1,0 +1,65 @@
+//@version=5
+strategy("Lobster BB RSI Mean Reversion", overlay=true, initial_capital=200, default_qty_type=strategy.percent_of_equity, default_qty_value=30, commission_type=strategy.commission.percent, commission_value=0.06)
+
+// ============ 参数设置 ============
+bb_len = input.int(20, "布林带周期", minval=5)
+bb_mult = input.float(2.0, "布林带标准差倍数", minval=0.5, step=0.1)
+rsi_len = input.int(14, "RSI 周期", minval=2)
+rsi_os = input.int(30, "RSI 超卖", minval=10)
+rsi_ob = input.int(70, "RSI 超买", maxval=90)
+use_webhook = input.bool(true, "发送 Webhook 信号")
+
+// ============ 指标计算 ============
+[middle, upper, lower] = ta.bb(close, bb_len, bb_mult)
+rsi = ta.rsi(close, rsi_len)
+bb_width = (upper - lower) / middle
+
+// ============ 信号逻辑 ============
+long_cond = close <= lower and rsi <= rsi_os
+short_cond = close >= upper and rsi >= rsi_ob
+
+// 止损止盈：中轨平仓
+exit_long = close >= middle
+exit_short = close <= middle
+
+// ============ 绘图 ============
+plot(upper, "BB Upper", color=color.new(color.blue, 50))
+plot(middle, "BB Middle", color=color.new(color.gray, 50), linewidth=1)
+plot(lower, "BB Lower", color=color.new(color.blue, 50))
+plot(rsi, "RSI", color=color.new(color.purple, 0), display=display.none)
+hline(rsi_os, "RSI 超卖", color=color.new(color.green, 70))
+hline(rsi_ob, "RSI 超买", color=color.new(color.red, 70))
+
+plotshape(long_cond, "做多", shape.triangleup, location.belowbar, color.new(color.green, 0), size=size.small)
+plotshape(short_cond, "做空", shape.triangledown, location.abovebar, color.new(color.red, 0), size=size.small)
+
+// ============ 策略执行 ============
+if long_cond
+    strategy.entry("MR_Long", strategy.long)
+if short_cond
+    strategy.entry("MR_Short", strategy.short)
+if exit_long and strategy.position_size > 0
+    strategy.close("MR_Long", comment="回归中轨平多")
+if exit_short and strategy.position_size < 0
+    strategy.close("MR_Short", comment="回归中轨平空")
+
+// ============ Webhook 信号 ============
+webhook_secret = "quant_lobster_2026"
+
+if use_webhook
+    if long_cond
+        sl = close * 0.97  // 3% 止损
+        tp = middle
+        msg = '{"secret":"' + webhook_secret + '","symbol":"' + syminfo.ticker + '/USDT","action":"long","price":"' + str.tostring(close) + '","stop_loss":"' + str.tostring(sl) + '","take_profit":"' + str.tostring(tp) + '","strategy":"bb_rsi","timeframe":"' + timeframe.period + '"}'
+        alert(msg, alert.freq_once_per_bar_close)
+    
+    if short_cond
+        sl = close * 1.03
+        tp = middle
+        msg = '{"secret":"' + webhook_secret + '","symbol":"' + syminfo.ticker + '/USDT","action":"short","price":"' + str.tostring(close) + '","stop_loss":"' + str.tostring(sl) + '","take_profit":"' + str.tostring(tp) + '","strategy":"bb_rsi","timeframe":"' + timeframe.period + '"}'
+        alert(msg, alert.freq_once_per_bar_close)
+
+    if (exit_long and strategy.position_size > 0) or (exit_short and strategy.position_size < 0)
+        direction = strategy.position_size > 0 ? "close_long" : "close_short"
+        msg = '{"secret":"' + webhook_secret + '","symbol":"' + syminfo.ticker + '/USDT","action":"' + direction + '","price":"' + str.tostring(close) + '","strategy":"bb_rsi","timeframe":"' + timeframe.period + '"}'
+        alert(msg, alert.freq_once_per_bar_close)
