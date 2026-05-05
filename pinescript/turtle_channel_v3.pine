@@ -44,17 +44,20 @@ wh_secret = input("quant_lobster_2026", "密钥", group=grp_web)
 // ATR
 atr = ta.atr(atr_len)
 
-// 入场通道（Donchian - 含当前K线）
-entry_upper = ta.highest(close, fast_len)
-entry_lower = ta.lowest(close, fast_len)
+// 入场通道（经典海龟 Donchian - 前N根K线，不含当前K线）
+entry_upper = ta.highest(high[1], fast_len)
+entry_lower = ta.lowest(low[1], fast_len)
 
-// 过滤通道
-filter_upper = ta.highest(close, slow_len)
-filter_lower = ta.lowest(close, slow_len)
+// 过滤通道（同理用 shift）
+filter_upper = ta.highest(high[1], slow_len)
+filter_lower = ta.lowest(low[1], slow_len)
+
+// 过滤中轨：价格在40日区间的上半部才做多，下半部才做空
+filter_mid = (filter_upper + filter_lower) / 2
 
 // 出场通道
-exit_upper = ta.highest(close, exit_len)
-exit_lower = ta.lowest(close, exit_len)
+exit_upper = ta.highest(high[1], exit_len)
+exit_lower = ta.lowest(low[1], exit_len)
 
 // ADX
 [di_p, di_m, adx_val] = ta.dmi(adx_len, adx_len)
@@ -65,10 +68,10 @@ vol_ok = not use_vol or volume > vol_ma
 
 // ============ 信号 ============
 
-// 做多条件：close 创 fast_len 新高 + 在慢通道上方 + ADX够强 + 放量
-long_entry = close >= entry_upper and close > filter_upper and (not use_adx or adx_val > adx_min) and vol_ok
-// 做空条件：close 创 fast_len 新低 + 在慢通道下方 + ADX够强 + 放量
-short_entry = close <= entry_lower and close < filter_lower and (not use_adx or adx_val > adx_min) and vol_ok
+// 做多条件：最高价突破入场通道上轨 + 收盘价在过滤中轨之上 + ADX够强 + 放量
+long_entry = high >= entry_upper and close > filter_mid and (not use_adx or adx_val > adx_min) and vol_ok
+// 做空条件：最低价跌破入场通道下轨 + 收盘价在过滤中轨之下 + ADX够强 + 放量
+short_entry = low <= entry_lower and close < filter_mid and (not use_adx or adx_val > adx_min) and vol_ok
 
 // 出场：快速通道反向突破
 long_exit = close < exit_lower
@@ -108,6 +111,7 @@ plot(exit_upper, "出场上界", color=color.new(color.green, 50), linewidth=1, 
 // 过滤通道
 plot(filter_upper, "过滤上界", color=color.new(color.orange, 70), linewidth=1)
 plot(filter_lower, "过滤下界", color=color.new(color.orange, 70), linewidth=1)
+plot(filter_mid, "过滤中轨", color=color.new(color.orange, 50), linewidth=1, style=plot.style_stepline)
 
 // 信号标记
 plotshape(long_first, "做多", shape.triangleup, location.belowbar, color.new(color.green, 0), size=size.small, text="L")
